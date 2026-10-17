@@ -92,7 +92,7 @@ def tables(actor=Depends(user), db: Session=Depends(db_session)):
 class NewDocument(BaseModel):
     table_id: int
     election_id: int = 1
-    chamber: Literal["congreso"] = "congreso"
+    chamber: Literal["congreso", "senado"] = "congreso"
     document_type: Literal["escrutinio"] = "escrutinio"
     mime_type: Literal["image/jpeg", "image/png"]
     idempotency_key: str = Field(min_length=8,max_length=100)
@@ -109,6 +109,11 @@ def create_document(body: NewDocument, actor=Depends(user), db: Session=Depends(
         return {"id":existing["id"],"upload_url":upload_url(existing["object_key"],body.mime_type) if existing["status"]=="pending_upload" else None,"status":existing["status"]}
     if not one(db,"SELECT 1 AS ok FROM elections WHERE id=:id",{"id":body.election_id}):
         fail(404,"Elección inexistente")
+    if not one(db,"SELECT 1 AS ok FROM election_document_types dt JOIN election_chambers ec ON ec.election_id=dt.election_id AND ec.chamber=dt.chamber WHERE dt.election_id=:eid AND dt.chamber=:ch AND dt.document_type=:typ AND dt.enabled=true AND ec.enabled=true",{"eid":body.election_id,"ch":body.chamber,"typ":body.document_type}):
+        fail(422,"Cámara o tipo documental no habilitado para esta elección")
+    active_catalog = one(db,"SELECT id FROM catalog_imports WHERE election_id=:eid AND status='active'",{"eid":body.election_id})
+    if active_catalog and not one(db,"SELECT 1 AS ok FROM catalog_rows WHERE import_id=:iid AND table_id=:tid",{"iid":active_catalog["id"],"tid":body.table_id}):
+        fail(422,"Mesa fuera del catálogo electoral activo")
     did, iid = str(uuid.uuid4()), str(uuid.uuid4())
     key = f"elections/{body.election_id}/documents/{did}/original"
     # Lock the table so concurrent versions receive distinct sequence numbers.
@@ -124,7 +129,9 @@ def owned_document(db,actor,did):
     d = one(db,"SELECT * FROM documents WHERE id=:id",{"id":did})
     if not d:
         fail(404,"Documento inexistente")
-    if actor["role"] == "organizacion" or not can_access(db,actor,d["table_id"]):
+    if actor["role"] == "organizacion" and actor["can_view_results"]:
+        return d
+    if not can_access(db,actor,d["table_id"]):
         fail()
     return d
 
@@ -172,7 +179,7 @@ def complete(did: str, actor=Depends(user), db: Session=Depends(db_session)):
 @app.get("/api/documents")
 def documents(limit: int=20, offset: int=0, actor=Depends(user), db: Session=Depends(db_session)):
     if not 1<=limit<=100 or offset<0: fail(422,"Paginación inválida")
-    if actor["role"] == "administrador":
+    if actor["role"] in ("administrador", "organizacion") and (actor["role"] == "administrador" or actor["can_view_results"]):
         return all_rows(db,"SELECT id,table_id,version,status,conflict,created_at FROM documents ORDER BY created_at DESC,id DESC LIMIT :lim OFFSET :off",{"lim":limit,"off":offset})
     return all_rows(db,"SELECT d.id,d.table_id,d.version,d.status,d.conflict,d.created_at FROM documents d JOIN assignments a ON a.table_id=d.table_id WHERE a.user_id=:uid ORDER BY d.created_at DESC,d.id DESC LIMIT :lim OFFSET :off",{"uid":actor["id"],"lim":limit,"off":offset})
 
@@ -181,7 +188,10 @@ def documents(limit: int=20, offset: int=0, actor=Depends(user), db: Session=Dep
 def document(did: str, actor=Depends(user), db: Session=Depends(db_session)):
     d = owned_document(db,actor,did)
     extraction = one(db,"SELECT provider,model_version,raw_json FROM extractions WHERE document_id=:id ORDER BY created_at DESC LIMIT 1",{"id":did})
-    return {"id":did,"table_id":d["table_id"],"version":d["version"],"status":d["status"],"conflict":d["conflict"],"extraction":extraction}
+    review_row = one(db,"SELECT r.values_json,r.decision,r.created_at,u.display_name AS reviewer FROM reviews r JOIN users u ON u.id=r.reviewer_id WHERE r.document_id=:id ORDER BY r.created_at DESC LIMIT 1",{"id":did})
+    if review_row:
+        review_row["values"] = json.loads(review_row.pop("values_json"))
+    return {"id":did,"table_id":d["table_id"],"version":d["version"],"status":d["status"],"conflict":d["conflict"],"current_validated":d["current_validated"],"review":review_row,"extraction":extraction}
 
 
 @app.get("/api/documents/{did}/image")
@@ -195,6 +205,7 @@ def image_url(did: str, actor=Depends(user), db: Session=Depends(db_session)):
 class Review(BaseModel):
     decision: Literal["validated","rejected"]
     votes: dict[str, StrictInt] = Field(default_factory=dict)
+    candidate_votes: dict[str, StrictInt] = Field(default_factory=dict)
     blank: StrictInt = 0
     null: StrictInt = 0
     total: StrictInt = 0
@@ -210,11 +221,16 @@ def review(did: str, body: Review, actor=Depends(user), db: Session=Depends(db_s
         fail(409,"Documento aún no revisable")
     if d["status"] in ("validated","rejected"):
         fail(409,"Documento ya revisado")
-    if any(v<0 for v in [*body.votes.values(),body.blank,body.null,body.total]): fail(422,"Votos negativos")
+    if any(v<0 for v in [*body.votes.values(),*body.candidate_votes.values(),body.blank,body.null,body.total]): fail(422,"Votos negativos")
     expected = {str(r["id"]) for r in all_rows(db,"SELECT id FROM candidacies WHERE election_id=:eid AND chamber=:ch AND constituency_code=(SELECT province_code FROM polling_tables WHERE id=:tid)",{"eid":d["election_id"],"ch":d["chamber"],"tid":d["table_id"]})}
     if body.decision == "validated":
-        if set(body.votes)!=expected or sum(body.votes.values())+body.blank+body.null!=body.total:
-            fail(422,"Candidaturas incompletas o suma inconsistente")
+        if d["chamber"] == "congreso":
+            if body.candidate_votes or set(body.votes)!=expected or sum(body.votes.values())+body.blank+body.null!=body.total:
+                fail(422,"Candidaturas incompletas o suma inconsistente para Congreso")
+        else:
+            candidates = {str(r["id"]) for r in all_rows(db,"SELECT ca.id FROM candidates ca JOIN candidacies c ON c.id=ca.candidacy_id WHERE c.election_id=:eid AND c.chamber='senado' AND c.constituency_code=(SELECT province_code FROM polling_tables WHERE id=:tid)",{"eid":d["election_id"],"tid":d["table_id"]})}
+            if body.votes or not candidates or set(body.candidate_votes)!=candidates or body.blank+body.null>body.total or any(v>body.total for v in body.candidate_votes.values()):
+                fail(422,"Votos por candidato incompletos o inválidos para Senado")
     # Rejecting stores the review, but never updates results.
     lock_table(db,d["table_id"])
     prior = one(db,"SELECT id FROM documents WHERE election_id=:eid AND table_id=:tid AND chamber=:ch AND document_type=:typ AND current_validated=true",{"eid":d["election_id"],"tid":d["table_id"],"ch":d["chamber"],"typ":d["document_type"]})
@@ -223,17 +239,56 @@ def review(did: str, body: Review, actor=Depends(user), db: Session=Depends(db_s
         rr = one(db,"SELECT values_json FROM reviews WHERE document_id=:id AND decision='validated' ORDER BY created_at DESC LIMIT 1",{"id":prior["id"]})
         prior_values = json.loads(rr["values_json"]) if rr else None
     values = body.model_dump()
-    conflict = body.decision == "validated" and prior_values is not None and {k:values[k] for k in ("votes","blank","null","total")} != {k:prior_values[k] for k in ("votes","blank","null","total")}
+    conflict = body.decision == "validated" and prior_values is not None and {k:values[k] for k in ("votes","candidate_votes","blank","null","total")} != {k:prior_values.get(k,{}) for k in ("votes","candidate_votes","blank","null","total")}
     db.execute(text("INSERT INTO reviews(id,document_id,reviewer_id,values_json,decision) VALUES (:id,:did,:uid,:values,:decision)"),{"id":str(uuid.uuid4()),"did":did,"uid":actor["id"],"values":json.dumps(values),"decision":body.decision})
     if body.decision == "validated":
-        if prior:
-            db.execute(text("UPDATE documents SET current_validated=false,updated_at=:now WHERE id=:id"),{"id":prior["id"],"now":now()})
+        if conflict:
+            db.execute(text("INSERT INTO conflict_resolutions(document_id,incumbent_id,status) VALUES (:did,:prior,'pending')"),{"did":did,"prior":prior["id"]})
         for cid,votes in body.votes.items():
             db.execute(text("INSERT INTO document_votes(document_id,candidacy_id,votes) VALUES (:did,:cid,:votes)"),{"did":did,"cid":int(cid),"votes":votes})
-    db.execute(text("UPDATE documents SET status=:status,current_validated=:current,conflict=:conflict,blank_votes=:blank,null_votes=:null,total_votes=:total,updated_at=:now WHERE id=:id"),{"status":body.decision,"current":body.decision=="validated","conflict":conflict,"blank":body.blank if body.decision=="validated" else None,"null":body.null if body.decision=="validated" else None,"total":body.total if body.decision=="validated" else None,"now":now(),"id":did})
+        for cid,votes in body.candidate_votes.items():
+            db.execute(text("INSERT INTO candidate_votes(document_id,candidate_id,votes) VALUES (:did,:cid,:votes)"),{"did":did,"cid":int(cid),"votes":votes})
+    current = body.decision == "validated" and prior is None
+    db.execute(text("UPDATE documents SET status=:status,current_validated=:current,conflict=:conflict,blank_votes=:blank,null_votes=:null,total_votes=:total,updated_at=:now WHERE id=:id"),{"status":body.decision,"current":current,"conflict":conflict,"blank":body.blank if body.decision=="validated" else None,"null":body.null if body.decision=="validated" else None,"total":body.total if body.decision=="validated" else None,"now":now(),"id":did})
     db.execute(text("INSERT INTO audit_events(id,document_id,actor_id,action,details_json) VALUES (:id,:did,:uid,:action,:details)"),{"id":str(uuid.uuid4()),"did":did,"uid":actor["id"],"action":body.decision,"details":json.dumps({"conflict":conflict,"replaced_document_id":prior["id"] if prior and body.decision=="validated" else None})})
     db.commit()
-    return {"status":body.decision,"conflict":conflict,"replaced_document_id":prior["id"] if prior and body.decision=="validated" else None}
+    return {"status":body.decision,"conflict":conflict,"resolution_pending":conflict,"current_validated":current,"incumbent_document_id":prior["id"] if prior else None}
+
+
+@app.get("/api/conflicts")
+def conflicts(limit: int=20, offset: int=0, actor=Depends(user), db: Session=Depends(db_session)):
+    if actor["role"] not in ("organizacion", "administrador") or not actor["can_view_results"]:
+        fail()
+    if not 1<=limit<=100 or offset<0: fail(422,"Paginación inválida")
+    return all_rows(db,"SELECT r.document_id,r.incumbent_id,r.created_at,d.table_id,d.election_id,d.chamber,d.document_type FROM conflict_resolutions r JOIN documents d ON d.id=r.document_id WHERE r.status='pending' ORDER BY r.created_at,r.document_id LIMIT :lim OFFSET :off",{"lim":limit,"off":offset})
+
+
+class ConflictDecision(BaseModel):
+    decision: Literal["accept_new", "keep_incumbent"]
+    reason: str = Field(min_length=3,max_length=1000)
+
+
+@app.post("/api/conflicts/{did}/resolve")
+def resolve_conflict(did: str, body: ConflictDecision, actor=Depends(user), db: Session=Depends(db_session)):
+    if actor["role"] not in ("organizacion", "administrador") or not actor["can_view_results"]:
+        fail()
+    d = one(db,"SELECT * FROM documents WHERE id=:id",{"id":did})
+    if not d:
+        fail(404,"Documento inexistente")
+    lock_table(db,d["table_id"])
+    resolution = one(db,"SELECT * FROM conflict_resolutions WHERE document_id=:id AND status='pending'",{"id":did})
+    if not resolution:
+        fail(409,"No hay discrepancia pendiente")
+    incumbent = one(db,"SELECT id FROM documents WHERE election_id=:eid AND table_id=:tid AND chamber=:ch AND document_type=:typ AND current_validated=true",{"eid":d["election_id"],"tid":d["table_id"],"ch":d["chamber"],"typ":d["document_type"]})
+    if not incumbent or incumbent["id"] != resolution["incumbent_id"]:
+        fail(409,"La versión vigente ha cambiado; revisar de nuevo")
+    if body.decision == "accept_new":
+        db.execute(text("UPDATE documents SET current_validated=false,updated_at=:now WHERE id=:id"),{"id":incumbent["id"],"now":now()})
+        db.execute(text("UPDATE documents SET current_validated=true,updated_at=:now WHERE id=:id"),{"id":did,"now":now()})
+    db.execute(text("UPDATE conflict_resolutions SET status=:status,resolver_id=:uid,reason=:reason,resolved_at=:now WHERE document_id=:id"),{"status":"accepted" if body.decision=="accept_new" else "kept_incumbent","uid":actor["id"],"reason":body.reason,"now":now(),"id":did})
+    db.execute(text("INSERT INTO audit_events(id,document_id,actor_id,action,details_json) VALUES (:id,:did,:uid,'resolve_conflict',:details)"),{"id":str(uuid.uuid4()),"did":did,"uid":actor["id"],"details":json.dumps(body.model_dump())})
+    db.commit()
+    return {"decision":body.decision,"current_document_id":did if body.decision=="accept_new" else incumbent["id"]}
 
 
 @app.post("/api/documents/{did}/withdraw")
@@ -249,17 +304,30 @@ def withdraw(did: str, actor=Depends(user), db: Session=Depends(db_session)):
 
 
 @app.get("/api/dashboard")
-def dashboard(actor=Depends(user), db: Session=Depends(db_session)):
+def dashboard(election_id: int=1, chamber: Literal["congreso","senado"]="congreso", actor=Depends(user), db: Session=Depends(db_session)):
     if not actor["can_view_results"]: fail()
+    if not one(db,"SELECT 1 AS ok FROM election_chambers WHERE election_id=:eid AND chamber=:ch AND enabled=true",{"eid":election_id,"ch":chamber}):
+        fail(404,"Cámara no habilitada para esta elección")
+    active_catalog=one(db,"SELECT id FROM catalog_imports WHERE election_id=:eid AND status='active'",{"eid":election_id})
     scope = "" if actor["role"] in ("organizacion","administrador") else " AND EXISTS (SELECT 1 FROM assignments a WHERE a.table_id=d.table_id AND a.user_id=:uid)"
-    params={"uid":actor["id"]}
-    states=all_rows(db,"SELECT d.status,COUNT(*) AS count FROM documents d WHERE 1=1"+scope+" GROUP BY d.status",params)
-    votes=all_rows(db,"SELECT c.name,SUM(v.votes) AS votes FROM document_votes v JOIN documents d ON d.id=v.document_id JOIN candidacies c ON c.id=v.candidacy_id WHERE d.current_validated=true AND d.status='validated'"+scope+" GROUP BY c.name ORDER BY c.name",params)
-    count=db.execute(text("SELECT COUNT(*) FROM documents d WHERE d.current_validated=true AND d.status='validated'"+scope),params).scalar_one()
-    sums=one(db,"SELECT COALESCE(SUM(d.blank_votes),0) AS blank_votes,COALESCE(SUM(d.null_votes),0) AS null_votes,COALESCE(SUM(d.total_votes),0) AS total_votes FROM documents d WHERE d.current_validated=true AND d.status='validated'"+scope,params)
-    covered=db.execute(text("SELECT COUNT(DISTINCT d.table_id) FROM documents d WHERE d.current_validated=true AND d.status='validated'"+scope),params).scalar_one()
-    denominator=db.execute(text("SELECT COUNT(*) FROM polling_tables" if actor["role"] in ("organizacion","administrador") else "SELECT COUNT(*) FROM assignments WHERE user_id=:uid"),params).scalar_one()
-    return {"synthetic":True,"updated_at":now().isoformat()+"Z","validated_documents":count,"covered_tables":covered,"assigned_tables_denominator":denominator,"totals":sums,"states":states,"votes":votes}
+    if active_catalog:
+        scope += " AND EXISTS (SELECT 1 FROM catalog_rows cr WHERE cr.import_id=:iid AND cr.table_id=d.table_id)"
+    params={"uid":actor["id"],"eid":election_id,"ch":chamber}
+    if active_catalog:
+        params["iid"] = active_catalog["id"]
+    base="d.election_id=:eid AND d.chamber=:ch"
+    states=all_rows(db,"SELECT d.status,COUNT(*) AS count FROM documents d WHERE "+base+scope+" GROUP BY d.status",params)
+    votes=all_rows(db,"SELECT c.id,c.name,SUM(v.votes) AS votes FROM document_votes v JOIN documents d ON d.id=v.document_id JOIN candidacies c ON c.id=v.candidacy_id WHERE d.current_validated=true AND d.status='validated' AND "+base+scope+" GROUP BY c.id,c.name ORDER BY c.name",params)
+    candidate_votes=all_rows(db,"SELECT ca.id,ca.name,SUM(v.votes) AS votes FROM candidate_votes v JOIN documents d ON d.id=v.document_id JOIN candidates ca ON ca.id=v.candidate_id WHERE d.current_validated=true AND d.status='validated' AND "+base+scope+" GROUP BY ca.id,ca.name ORDER BY ca.name",params)
+    count=db.execute(text("SELECT COUNT(*) FROM documents d WHERE d.current_validated=true AND d.status='validated' AND "+base+scope),params).scalar_one()
+    sums=one(db,"SELECT COALESCE(SUM(d.blank_votes),0) AS blank_votes,COALESCE(SUM(d.null_votes),0) AS null_votes,COALESCE(SUM(d.total_votes),0) AS total_votes FROM documents d WHERE d.current_validated=true AND d.status='validated' AND "+base+scope,params)
+    covered=db.execute(text("SELECT COUNT(DISTINCT d.table_id) FROM documents d WHERE d.current_validated=true AND d.status='validated' AND "+base+scope),params).scalar_one()
+    if active_catalog:
+        denominator=db.execute(text("SELECT COUNT(*) FROM catalog_rows cr WHERE cr.import_id=:iid"+("" if actor["role"] in ("organizacion","administrador") else " AND EXISTS (SELECT 1 FROM assignments a WHERE a.table_id=cr.table_id AND a.user_id=:uid)")),{"iid":active_catalog["id"],"uid":actor["id"]}).scalar_one()
+    else:
+        denominator=db.execute(text("SELECT COUNT(*) FROM polling_tables" if actor["role"] in ("organizacion","administrador") else "SELECT COUNT(*) FROM assignments WHERE user_id=:uid"),params).scalar_one()
+    election=one(db,"SELECT name,synthetic FROM elections WHERE id=:eid",params)
+    return {"election_id":election_id,"election_name":election["name"],"chamber":chamber,"synthetic":election["synthetic"],"catalog_version":active_catalog["id"] if active_catalog else None,"updated_at":now().isoformat()+"Z","validated_documents":count,"covered_tables":covered,"assigned_tables_denominator":denominator,"totals":sums,"states":states,"votes":votes,"candidate_votes":candidate_votes}
 
 
 @app.get("/")

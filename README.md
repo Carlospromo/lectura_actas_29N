@@ -20,10 +20,24 @@ Abrir <http://localhost:8001>. El servicio de almacenamiento privado local usa e
 2. Seleccionar mesa A y una foto JPEG/PNG. La API crea documento y URL temporal; el navegador envía la foto directamente al servicio de almacenamiento; la API comprueba el objeto y encola.
 3. Esperar unos segundos y pulsar **Actualizar**. Abrir el envío, comprobar la fotografía e introducir las cifras manualmente. El extractor simulado propone valores ausentes y nunca inventa votos.
 4. Validar. Cerrar sesión y entrar como **Organización** para consultar resultados validados.
-5. Crear otra acta de la misma mesa con distribución diferente e igual total. Se guarda como nueva versión y se indica discrepancia. Un envío rechazado conserva la evidencia y no suma votos.
+5. Crear otra acta de la misma mesa con distribución diferente e igual total. Se guarda como nueva versión y se indica discrepancia. **Organización** ve ambas imágenes y cifras, decide qué versión queda vigente y registra un motivo. Hasta esa decisión, el dashboard conserva la versión previa. Un envío rechazado conserva la evidencia y no suma votos.
 6. Reiniciar `docker compose restart` y comprobar que documentos e imágenes siguen accesibles.
 
 Las cuentas de prueba: 1 Apoderado A (mesa 1), 2 Apoderado B (mesa 2), 3 Organización (resultados), 4 Supervisor (ambas mesas y resultados). Los teléfonos y el SMS no están conectados. No se incluye ninguna cuenta de producción.
+
+## Definición electoral y catálogo
+
+La elección prevista cubre **solo Congreso**, con fecha todavía provisional. El único documento habilitado en el recorrido local es el acta de escrutinio de mesa. La [definición electoral](DEFINICION_ELECTORAL.md) describe campos, reglas, procedencia y decisiones pendientes. Senado tiene tablas y validación diferenciadas, pero está deshabilitado para esta elección.
+
+El importador recibe un CSV UTF-8 con la cabecera exacta indicada en la definición electoral. No hay catálogo nacional precargado ni descarga automática de mesas. El comando `python -m app.election create --name "NOMBRE DEL PROCESO" --event-date AAAA-MM-DD` registra explícitamente una elección con fecha provisional, solo Congreso y acta de escrutinio de mesa; `update-date ID --event-date AAAA-MM-DD --date-confirmed` confirma una fecha después. La elección `1` es **solo sintética**. Para ensayar una importación sintética en desarrollo:
+
+```powershell
+py -3.13 -m app.catalog stage .\ruta\catalogo_sintetico.csv --election-id 1 --version ensayo-1 --source-name "Archivo sintético de prueba" --scope synthetic
+py -3.13 -m app.catalog list
+py -3.13 -m app.catalog activate ID_DEVUELTO_POR_STAGE
+```
+
+En Compose, ejecute los mismos comandos con `docker compose exec api python -m app.catalog ...` y coloque primero el CSV en un volumen o cópielo al contenedor. La activación es atómica; no borra versiones ni documentos. Para un catálogo nacional se usa `--scope national`, una elección no sintética y la procedencia declarada con `--source-name` y `--source-url`; exige las 52 provincias. El archivo debe conciliarse manualmente con las fuentes del proceso antes de activarlo. Si el mismo identificador de mesa cambia de local, la activación se detiene para revisión.
 
 ## Pruebas
 
@@ -46,6 +60,6 @@ docker compose logs worker
 
 - API FastAPI, migración SQL inicial, PostgreSQL, servicio de archivos privado local y trabajador separado con cola durable en PostgreSQL. No hay OCR dentro de una petición HTTP. El almacenamiento local usa firmas HMAC; se sustituirá por Cloud Storage para producción.
 - Estados y envíos persisten. Una restricción parcial impide dos versiones vigentes por mesa/proceso. Los resultados se calculan sólo con versiones validadas vigentes.
-- La extracción local es simulada; los valores se introducen manualmente. Congreso usa candidaturas sintéticas. Senado, catálogo oficial, importador, autenticación SMS, OCR real, despliegue y métricas de producción son fases posteriores descritas en [PLAN.md](PLAN.md).
+- La extracción local es simulada; los valores se introducen manualmente. Congreso usa candidaturas sintéticas. El importador versionado y el esquema técnico de Senado están disponibles; faltan catálogo y modelos aplicables, autenticación SMS, OCR real, despliegue y métricas de producción, descritos en [PLAN.md](PLAN.md).
 - `APP_ENV=production` impide el arranque hasta implementar y configurar autenticación y almacenamiento de producción. No reutilizar claves locales fuera del equipo de desarrollo.
 - El catálogo de ejemplo contiene únicamente dos mesas sintéticas. No debe usarse para estimar cobertura española.
