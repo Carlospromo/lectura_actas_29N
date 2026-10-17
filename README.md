@@ -96,3 +96,4 @@ docker compose logs worker
 - `APP_ENV=production` impide el arranque hasta implementar y configurar autenticación y almacenamiento de producción. No reutilizar claves locales fuera del equipo de desarrollo.
 - El catálogo de ejemplo contiene únicamente dos mesas sintéticas. No debe usarse para estimar cobertura española.
 - La [preparación OCR](OCR_PREPARACION.md) documenta el contrato de campos y las pruebas estructurales. El ejemplo de acta CERA recibido se usa sólo para evitar confundirlo con un acta de mesa; no hay OCR real ni medición de precisión sobre fotografías.
+- La plantilla en blanco de mesa de 2023 se guarda como fixture y permite ensayar el mapa provisional de campos: `py -3.13 -m app.ocr_layout tests/fixtures/aem_2023_blank.png`. El comando devuelve regiones y 40 filas en JSON después de cotejar la cuadrícula. Requiere una página rectificada y no reconoce texto ni activa el modelo para 2026.
