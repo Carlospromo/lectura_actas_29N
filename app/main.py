@@ -15,7 +15,7 @@ from PIL import Image
 
 from app.config import settings
 from app.db import db_session, one, all_rows
-from app.storage import client, ensure_bucket, upload_url, read_url
+from app.storage import get_object, put_evidence, delete_staging, upload_url, read_url
 
 app = FastAPI(title="Actas 29N — desarrollo sintético")
 
@@ -102,7 +102,6 @@ class NewDocument(BaseModel):
 def create_document(body: NewDocument, actor=Depends(user), db: Session=Depends(db_session)):
     if actor["role"] not in ("apoderado","supervisor","administrador") or not can_access(db,actor,body.table_id):
         fail()
-    ensure_bucket()
     existing = one(db,"SELECT d.*,i.object_key FROM documents d JOIN document_images i ON i.document_id=d.id WHERE d.uploader_id=:uid AND d.idempotency_key=:key",{"uid":actor["id"],"key":body.idempotency_key})
     if existing:
         if (existing["table_id"],existing["election_id"],existing["chamber"],existing["document_type"]) != (body.table_id,body.election_id,body.chamber,body.document_type):
@@ -137,8 +136,7 @@ def complete(did: str, actor=Depends(user), db: Session=Depends(db_session)):
         return {"status":d["status"]}
     im = one(db,"SELECT * FROM document_images WHERE document_id=:id",{"id":did})
     try:
-        obj = client().get_object(Bucket=settings.s3_bucket,Key=im["object_key"])
-        data = obj["Body"].read(settings.max_image_bytes+1)
+        data = get_object(im["object_key"])
     except Exception:
         fail(400,"Imagen no recibida")
     if not data or len(data)>settings.max_image_bytes:
@@ -156,8 +154,8 @@ def complete(did: str, actor=Depends(user), db: Session=Depends(db_session)):
     if width<32 or height<32 or orientation not in range(1,9):
         fail(400,"Dimensiones u orientación inválidas")
     evidence_key=f"elections/{d['election_id']}/documents/{did}/evidence/{hashlib.sha256(data).hexdigest()}"
-    client().copy_object(Bucket=settings.s3_bucket,CopySource={"Bucket":settings.s3_bucket,"Key":im["object_key"]},Key=evidence_key)
-    sealed=client().get_object(Bucket=settings.s3_bucket,Key=evidence_key)["Body"].read(settings.max_image_bytes+1)
+    put_evidence(evidence_key,data,im["mime_type"])
+    sealed=get_object(evidence_key)
     if hashlib.sha256(sealed).hexdigest()!=hashlib.sha256(data).hexdigest():
         fail(409,"La imagen cambió durante la confirmación; reintenta")
     db.execute(text("UPDATE document_images SET object_key=:evidence,byte_size=:size,sha256=:sha,width_px=:width,height_px=:height,exif_orientation=:orientation,received_at=:now WHERE document_id=:id"),{"evidence":evidence_key,"size":len(data),"sha":hashlib.sha256(data).hexdigest(),"width":width,"height":height,"orientation":orientation,"now":now(),"id":did})
@@ -165,7 +163,7 @@ def complete(did: str, actor=Depends(user), db: Session=Depends(db_session)):
     db.execute(text("INSERT INTO processing_jobs(id,document_id,status) VALUES (:id,:did,'queued') ON CONFLICT(document_id) DO NOTHING"),{"id":str(uuid.uuid4()),"did":did})
     db.commit()
     try:
-        client().delete_object(Bucket=settings.s3_bucket,Key=im["object_key"])
+        delete_staging(im["object_key"])
     except Exception:
         pass  # Sealed evidence remains; stale staging objects can be cleaned later.
     return {"status":"received","sha256":hashlib.sha256(data).hexdigest()}
@@ -189,9 +187,9 @@ def document(did: str, actor=Depends(user), db: Session=Depends(db_session)):
 @app.get("/api/documents/{did}/image")
 def image_url(did: str, actor=Depends(user), db: Session=Depends(db_session)):
     owned_document(db,actor,did)
-    im = one(db,"SELECT object_key,received_at FROM document_images WHERE document_id=:id",{"id":did})
+    im = one(db,"SELECT object_key,mime_type,received_at FROM document_images WHERE document_id=:id",{"id":did})
     if not im or not im["received_at"]: fail(404,"Imagen no recibida")
-    return {"url":read_url(im["object_key"]),"expires_seconds":120}
+    return {"url":read_url(im["object_key"],im["mime_type"]),"expires_seconds":120}
 
 
 class Review(BaseModel):

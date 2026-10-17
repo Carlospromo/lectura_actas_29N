@@ -10,9 +10,11 @@ os.environ["APP_ENV"] = "development"
 from fastapi.testclient import TestClient
 from PIL import Image
 from app import main, worker
+from app import storage, storage_service
 from app.db import engine, Session, one
 from app.migrate import migrate
 from sqlalchemy import text
+from urllib.parse import urlsplit
 
 migrate()
 
@@ -21,22 +23,11 @@ Image.new("RGB", (40, 40), "white").save(photo, format="JPEG")
 OBJECTS = {}
 
 
-class FakeS3:
-    def get_object(self, Bucket, Key):
-        if Key not in OBJECTS: raise KeyError(Key)
-        return {"Body": io.BytesIO(OBJECTS[Key])}
-
-    def copy_object(self, Bucket, CopySource, Key):
-        OBJECTS[Key] = OBJECTS[CopySource["Key"]]
-
-    def delete_object(self, Bucket, Key):
-        OBJECTS.pop(Key, None)
-
-
-main.client = lambda: FakeS3()
-main.ensure_bucket = lambda: None
+main.get_object = lambda key: OBJECTS[key]
+main.put_evidence = lambda key,data,mime: OBJECTS.__setitem__(key,data)
+main.delete_staging = lambda key: OBJECTS.pop(key,None)
 main.upload_url = lambda key, mime: "fake://" + key
-main.read_url = lambda key: "fake://" + key
+main.read_url = lambda key,mime: "fake://" + key
 
 
 def login(uid):
@@ -127,3 +118,22 @@ def test_dashboard_counts_beyond_500():
     data=login(3).get("/api/dashboard").json()
     assert data["validated_documents"]==501
     assert data["votes"][0]["votes"]==501
+
+
+def test_storage_signed_access_and_disk_persistence(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage_service,"ROOT",tmp_path)
+    c=TestClient(storage_service.app)
+    preflight=c.options("/objects/test",headers={"Origin":"http://localhost:8000","Access-Control-Request-Method":"PUT","Access-Control-Request-Headers":"content-type"})
+    assert preflight.status_code==200
+    key="elections/1/documents/test/original"
+    url=storage.upload_url(key,"image/jpeg")
+    path=urlsplit(url).path+"?"+urlsplit(url).query
+    assert c.get("/objects/"+key).status_code==403
+    assert c.put("/objects/"+key,content=photo.getvalue()).status_code==403
+    assert c.put(path,content=photo.getvalue(),headers={"Content-Type":"image/jpeg"}).status_code==200
+    assert c.get("/internal/objects/"+key).status_code==403
+    assert (tmp_path/key).read_bytes()==photo.getvalue()
+    evidence="elections/1/documents/test/evidence/hash"
+    headers={"X-Storage-Secret":storage.settings.storage_secret}
+    assert c.put("/internal/objects/"+evidence,content=photo.getvalue(),headers=headers).status_code==200
+    assert c.get(urlsplit(storage.read_url(evidence)).path+"?"+urlsplit(storage.read_url(evidence)).query).content==photo.getvalue()
