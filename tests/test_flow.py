@@ -207,3 +207,19 @@ def test_election_date_is_data():
         assert one(db,"SELECT enabled FROM election_chambers WHERE election_id=:id AND chamber='senado'",{"id":item["id"]})["enabled"]==0
     changed=update_date(item["id"],"2026-12-06",date_confirmed=True)
     assert changed["event_date"]=="2026-12-06"
+
+
+def test_national_import_structure_covers_52_provinces(tmp_path):
+    item=create_election("PRUEBA TÉCNICA NO OFICIAL","2026-11-29")
+    header="province_code,province_name,municipality_code,municipality_name,place_code,place_name,district,section,table_label\n"
+    lines=[f"{n:02d},PROVINCIA DE PRUEBA {n:02d},{n:02d}001,MUNICIPIO DE PRUEBA,LOCAL-1,LOCAL DE PRUEBA,01,001,A\n" for n in range(1,53)]
+    file=tmp_path/"catalog_nacional_no_oficial.csv"
+    file.write_text(header+"".join(lines),encoding="utf-8")
+    staged=stage(file,item["id"],"prueba-52","Fixture temporal no oficial","national")
+    assert activate(staged["id"])["rows"]==52
+    result=login(3).get(f"/api/dashboard?election_id={item['id']}&chamber=congreso")
+    assert result.status_code==200
+    assert result.json()["assigned_tables_denominator"]==52
+    with Session() as db:
+        codes={r["province_code"] for r in db.execute(text("SELECT province_code FROM catalog_rows WHERE import_id=:id"),{"id":staged["id"]}).mappings()}
+        assert {"51","52"}.issubset(codes)

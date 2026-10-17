@@ -308,7 +308,7 @@ def dashboard(election_id: int=1, chamber: Literal["congreso","senado"]="congres
     if not actor["can_view_results"]: fail()
     if not one(db,"SELECT 1 AS ok FROM election_chambers WHERE election_id=:eid AND chamber=:ch AND enabled=true",{"eid":election_id,"ch":chamber}):
         fail(404,"Cámara no habilitada para esta elección")
-    active_catalog=one(db,"SELECT id FROM catalog_imports WHERE election_id=:eid AND status='active'",{"eid":election_id})
+    active_catalog=one(db,"SELECT id,version FROM catalog_imports WHERE election_id=:eid AND status='active'",{"eid":election_id})
     scope = "" if actor["role"] in ("organizacion","administrador") else " AND EXISTS (SELECT 1 FROM assignments a WHERE a.table_id=d.table_id AND a.user_id=:uid)"
     if active_catalog:
         scope += " AND EXISTS (SELECT 1 FROM catalog_rows cr WHERE cr.import_id=:iid AND cr.table_id=d.table_id)"
@@ -327,7 +327,7 @@ def dashboard(election_id: int=1, chamber: Literal["congreso","senado"]="congres
     else:
         denominator=db.execute(text("SELECT COUNT(*) FROM polling_tables" if actor["role"] in ("organizacion","administrador") else "SELECT COUNT(*) FROM assignments WHERE user_id=:uid"),params).scalar_one()
     election=one(db,"SELECT name,synthetic FROM elections WHERE id=:eid",params)
-    return {"election_id":election_id,"election_name":election["name"],"chamber":chamber,"synthetic":election["synthetic"],"catalog_version":active_catalog["id"] if active_catalog else None,"updated_at":now().isoformat()+"Z","validated_documents":count,"covered_tables":covered,"assigned_tables_denominator":denominator,"totals":sums,"states":states,"votes":votes,"candidate_votes":candidate_votes}
+    return {"election_id":election_id,"election_name":election["name"],"chamber":chamber,"synthetic":election["synthetic"],"catalog_version":active_catalog["version"] if active_catalog else None,"updated_at":now().isoformat()+"Z","validated_documents":count,"covered_tables":covered,"assigned_tables_denominator":denominator,"totals":sums,"states":states,"votes":votes,"candidate_votes":candidate_votes}
 
 
 @app.get("/")
