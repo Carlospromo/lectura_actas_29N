@@ -1,0 +1,24 @@
+name: Local phase integration
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pytest -q
+      - run: cp .env.example .env
+      - run: docker compose up --build -d
+      - run: python scripts/smoke.py create
+      - run: docker compose restart
+      - run: python scripts/smoke.py verify
+      - if: failure()
+        run: docker compose ps && docker compose logs --tail=100
+      - if: always()
+        run: docker compose down
