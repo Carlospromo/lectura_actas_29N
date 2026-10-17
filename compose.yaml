@@ -15,6 +15,7 @@ services:
     environment:
       SERVICES: s3
       PERSISTENCE: "1"
+      SNAPSHOT_SAVE_STRATEGY: ON_REQUEST
     ports: ["4566:4566"]
     volumes: [objects:/var/lib/localstack]
   api:
