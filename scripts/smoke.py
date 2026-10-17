@@ -41,7 +41,7 @@ def create():
     r=agent.post("/api/documents",json=payload)
     r.raise_for_status()
     d=r.json()
-    assert d["upload_url"].startswith("http://localhost:9000/")
+    assert d["upload_url"].startswith("http://localhost:4566/")
     image=io.BytesIO()
     Image.new("RGB",(100,100),"white").save(image,format="JPEG")
     put=httpx.put(d["upload_url"],content=image.getvalue(),headers={"Content-Type":"image/jpeg"},timeout=30)

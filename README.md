@@ -12,12 +12,12 @@ docker compose up --build -d
 docker compose ps
 ```
 
-Abrir <http://localhost:8000>. MinIO local usa el puerto 9000 para las subidas firmadas. El dashboard sólo se muestra a usuarios con permiso. Para parar sin borrar datos: `docker compose down`. Para reanudar: `docker compose up -d`. Los volúmenes `pgdata` y `objects` mantienen datos e imágenes. **No usar `down -v` si se desean conservar.**
+Abrir <http://localhost:8000>. LocalStack S3 local usa el puerto 4566 para las subidas firmadas. El dashboard sólo se muestra a usuarios con permiso. Para parar sin borrar datos: `docker compose down`. Para reanudar: `docker compose up -d`. Los volúmenes `pgdata` y `objects` mantienen datos e imágenes. **No usar `down -v` si se desean conservar.**
 
 ## Recorrido
 
 1. Iniciar como **Apoderado A**, código `TEST-ONLY-2026`. Es autenticación de prueba exclusiva de `APP_ENV=development`.
-2. Seleccionar mesa A y una foto JPEG/PNG. La API crea documento y URL temporal; el navegador envía la foto a MinIO directamente; la API comprueba el objeto y encola.
+2. Seleccionar mesa A y una foto JPEG/PNG. La API crea documento y URL temporal; el navegador envía la foto a LocalStack S3 directamente; la API comprueba el objeto y encola.
 3. Esperar unos segundos y pulsar **Actualizar**. Abrir el envío, comprobar la fotografía e introducir las cifras manualmente. El extractor simulado propone valores ausentes y nunca inventa votos.
 4. Validar. Cerrar sesión y entrar como **Organización** para consultar resultados validados.
 5. Crear otra acta de la misma mesa con distribución diferente e igual total. Se guarda como nueva versión y se indica discrepancia. Un envío rechazado conserva la evidencia y no suma votos.
@@ -33,7 +33,7 @@ py -3.13 -m pytest -q
 docker compose config
 ```
 
-La suite usa SQLite temporal y almacenamiento simulado para probar las reglas de API sin proveedores. No sustituye la prueba de integración PostgreSQL/MinIO. Para revisar datos reales de desarrollo:
+La suite usa SQLite temporal y almacenamiento simulado para probar las reglas de API sin proveedores. No sustituye la prueba de integración PostgreSQL/LocalStack S3. Para revisar datos reales de desarrollo:
 
 ```powershell
 docker compose exec db psql -U actas -d actas -c "select status,count(*) from documents group by status;"
@@ -42,7 +42,7 @@ docker compose logs worker
 
 ## Diseño y límites actuales
 
-- API FastAPI, migración SQL inicial, PostgreSQL, MinIO privado y trabajador separado con cola durable en PostgreSQL. No hay OCR dentro de una petición HTTP.
+- API FastAPI, migración SQL inicial, PostgreSQL, almacenamiento S3 privado emulado por LocalStack y trabajador separado con cola durable en PostgreSQL. No hay OCR dentro de una petición HTTP.
 - Estados y envíos persisten. Una restricción parcial impide dos versiones vigentes por mesa/proceso. Los resultados se calculan sólo con versiones validadas vigentes.
 - La extracción local es simulada; los valores se introducen manualmente. Congreso usa candidaturas sintéticas. Senado, catálogo oficial, importador, autenticación SMS, OCR real, despliegue y métricas de producción son fases posteriores descritas en [PLAN.md](PLAN.md).
 - `APP_ENV=production` impide el arranque hasta implementar y configurar autenticación y almacenamiento de producción. No reutilizar claves locales fuera del equipo de desarrollo.
