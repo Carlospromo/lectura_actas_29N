@@ -1,4 +1,5 @@
 import io
+import json
 import os
 from pathlib import Path
 
@@ -53,7 +54,7 @@ def submit(c, table, idem, **other):
 
 def review(c, did, votes, decision="validated"):
     total=sum(votes.values())
-    return c.post(f"/api/documents/{did}/review", json={"decision":decision,"votes":votes,"blank":0,"null":0,"total":total})
+    return c.post(f"/api/documents/{did}/review", json={"decision":decision,"mesa_congreso_confirmed":True,"votes":votes,"blank":0,"null":0,"total":total})
 
 
 def test_full_flow_permissions_conflicts_and_restart():
@@ -66,6 +67,7 @@ def test_full_flow_permissions_conflicts_and_restart():
     assert a.get("/api/dashboard").status_code == 403
     assert org.post("/api/documents",json={"table_id":1,"mime_type":"image/jpeg","idempotency_key":"forbidden-2"}).status_code == 403
     d1=submit(a,1,"first-upload")
+    assert json.loads(a.get(f"/api/documents/{d1}").json()["extraction"]["raw_json"])["document_kind"] == "unknown"
     assert b.get(f"/api/documents/{d1}").status_code == 403
     assert b.get(f"/api/documents/{d1}/image").status_code == 403
     assert a.get(f"/api/documents/{d1}/image").status_code == 200
@@ -102,6 +104,7 @@ def test_full_flow_permissions_conflicts_and_restart():
 def test_invalid_votes_and_session_revoke():
     a=login(1)
     did=submit(a,1,"invalid-votes")
+    assert a.post(f"/api/documents/{did}/review",json={"decision":"validated","votes":{"1":1,"2":0},"total":1}).status_code == 422
     assert review(a,did,{"1":1.5,"2":2}).status_code == 422
     assert review(a,did,{"1":-1,"2":2}).status_code == 422
     assert review(a,did,{"1":1}).status_code == 422

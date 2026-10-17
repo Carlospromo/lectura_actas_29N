@@ -5,6 +5,7 @@ from datetime import timedelta
 from sqlalchemy import text
 from app.db import Session, one
 from app.main import now
+from app.ocr_contract import ProposedExtraction
 
 
 def process_one():
@@ -20,7 +21,7 @@ def process_one():
         db.commit()
     try:
         # The local extractor deliberately returns no invented values.
-        raw={"total":{"kind":"absent"},"blank":{"kind":"absent"},"null":{"kind":"absent"},"votes":{},"note":"EXTRACCIÓN SIMULADA: introducir cifras manualmente"}
+        raw=ProposedExtraction(document_kind="unknown",total={"kind":"absent"},blank={"kind":"absent"},null={"kind":"absent"},votes={},note="EXTRACCIÓN SIMULADA: confirmar que es acta de mesa de Congreso e introducir cifras manualmente").model_dump()
         with Session.begin() as db:
             db.execute(text("INSERT INTO extractions(id,document_id,provider,model_version,config_json,raw_json) VALUES (:id,:did,'simulated','dev-1',:config,:raw) ON CONFLICT(document_id) DO NOTHING"),{"id":str(uuid.uuid4()),"did":job["document_id"],"config":json.dumps({"mode":"development_only"}),"raw":json.dumps(raw)})
             db.execute(text("UPDATE documents SET status='pending_review',updated_at=:now WHERE id=:id"),{"now":now(),"id":job["document_id"]})

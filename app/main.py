@@ -8,7 +8,7 @@ from typing import Literal
 
 from fastapi import FastAPI, Depends, HTTPException, Response, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, StrictInt
+from pydantic import BaseModel, Field, StrictBool, StrictInt
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from PIL import Image
@@ -221,6 +221,7 @@ def image_url(did: str, actor=Depends(user), db: Session=Depends(db_session)):
 
 class Review(BaseModel):
     decision: Literal["validated","rejected"]
+    mesa_congreso_confirmed: StrictBool = False
     votes: dict[str, StrictInt] = Field(default_factory=dict)
     candidate_votes: dict[str, StrictInt] = Field(default_factory=dict)
     blank: StrictInt = 0
@@ -248,6 +249,8 @@ def review(did: str, body: Review, actor=Depends(user), db: Session=Depends(db_s
         expected = {str(r["id"]) for r in all_rows(db,"SELECT id FROM candidacies WHERE election_id=:eid AND chamber=:ch AND constituency_code=(SELECT province_code FROM polling_tables WHERE id=:tid)",{"eid":d["election_id"],"ch":d["chamber"],"tid":d["table_id"]})}
     if body.decision == "validated":
         if d["chamber"] == "congreso":
+            if not body.mesa_congreso_confirmed:
+                fail(422,"Confirma que la imagen es un acta de escrutinio de mesa para Congreso")
             if not expected or body.candidate_votes or set(body.votes)!=expected or sum(body.votes.values())+body.blank+body.null!=body.total:
                 fail(422,"Candidaturas incompletas o suma inconsistente para Congreso")
         else:

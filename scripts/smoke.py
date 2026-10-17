@@ -54,12 +54,12 @@ def create():
             time.sleep(1)
         raise RuntimeError(f"Worker did not finish: {status}")
     first=upload()
-    r=agent.post(f"/api/documents/{first}/review",json={"decision":"validated","votes":{"1":100,"2":50},"blank":0,"null":0,"total":150})
+    r=agent.post(f"/api/documents/{first}/review",json={"decision":"validated","mesa_congreso_confirmed":True,"votes":{"1":100,"2":50},"blank":0,"null":0,"total":150})
     r.raise_for_status()
     org=login(3)
     assert org.get("/api/dashboard").json()["validated_documents"] >= 1
     second=upload()
-    r=agent.post(f"/api/documents/{second}/review",json={"decision":"validated","votes":{"1":50,"2":100},"blank":0,"null":0,"total":150})
+    r=agent.post(f"/api/documents/{second}/review",json={"decision":"validated","mesa_congreso_confirmed":True,"votes":{"1":50,"2":100},"blank":0,"null":0,"total":150})
     r.raise_for_status()
     assert r.json()["resolution_pending"] is True
     assert org.get("/api/dashboard").json()["votes"][0]["votes"]==100

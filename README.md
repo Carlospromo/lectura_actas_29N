@@ -18,7 +18,7 @@ Abrir <http://localhost:8001>. El servicio de almacenamiento privado local usa e
 
 1. Iniciar como **Apoderado A**, código `TEST-ONLY-2026`. Es autenticación de prueba exclusiva de `APP_ENV=development`.
 2. Seleccionar mesa A y una foto JPEG/PNG. La API crea documento y URL temporal; el navegador envía la foto directamente al servicio de almacenamiento; la API comprueba el objeto y encola.
-3. Esperar unos segundos y pulsar **Actualizar**. Abrir el envío, comprobar la fotografía e introducir las cifras manualmente. El extractor simulado propone valores ausentes y nunca inventa votos.
+3. Esperar unos segundos y pulsar **Actualizar**. Abrir el envío, comprobar que es un acta de escrutinio de **mesa de Congreso**, marcar la confirmación e introducir las cifras manualmente. El extractor simulado propone valores ausentes y nunca inventa votos.
 4. Validar. Cerrar sesión y entrar como **Organización** para consultar resultados validados.
 5. Crear otra acta de la misma mesa con distribución diferente e igual total. Se guarda como nueva versión y se indica discrepancia. **Organización** ve ambas imágenes y cifras, decide qué versión queda vigente y registra un motivo. Hasta esa decisión, el dashboard conserva la versión previa. Un envío rechazado conserva la evidencia y no suma votos.
 6. Reiniciar `docker compose restart` y comprobar que documentos e imágenes siguen accesibles.
@@ -95,3 +95,4 @@ docker compose logs worker
 - La extracción local es simulada; los valores se introducen manualmente. Congreso usa candidaturas sintéticas. El importador versionado y el esquema técnico de Senado están disponibles; faltan catálogo y modelos aplicables, autenticación SMS, OCR real, despliegue y métricas de producción, descritos en [PLAN.md](PLAN.md).
 - `APP_ENV=production` impide el arranque hasta implementar y configurar autenticación y almacenamiento de producción. No reutilizar claves locales fuera del equipo de desarrollo.
 - El catálogo de ejemplo contiene únicamente dos mesas sintéticas. No debe usarse para estimar cobertura española.
+- La [preparación OCR](OCR_PREPARACION.md) documenta el contrato de campos y las pruebas estructurales. El ejemplo de acta CERA recibido se usa sólo para evitar confundirlo con un acta de mesa; no hay OCR real ni medición de precisión sobre fotografías.
