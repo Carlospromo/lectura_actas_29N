@@ -15,6 +15,7 @@ from app.db import engine, Session, one
 from app.migrate import migrate
 from app.catalog import stage, activate, parse_rows
 from app.election import create as create_election, update_date
+from app.candidacy_import import stage as stage_candidacies, activate as activate_candidacies, parse_rows as parse_candidacies
 from sqlalchemy import text
 from urllib.parse import urlsplit
 
@@ -106,6 +107,27 @@ def test_invalid_votes_and_session_revoke():
     assert review(a,did,{"1":1}).status_code == 422
     assert a.post("/api/logout").status_code == 200
     assert a.get("/api/tables").status_code == 401
+
+
+def test_upload_completion_role_and_idempotency_mime():
+    a, org = login(1), login(3)
+    payload = {"table_id":1,"mime_type":"image/jpeg","idempotency_key":"completion-role-check"}
+    created = a.post("/api/documents", json=payload)
+    assert created.status_code == 200
+    did = created.json()["id"]
+    assert org.post(f"/api/documents/{did}/complete").status_code == 403
+    changed = a.post("/api/documents", json={**payload,"mime_type":"image/png"})
+    assert changed.status_code == 409
+    assert a.post("/api/documents", json=payload).json()["id"] == did
+    with Session.begin() as db:
+        db.execute(text("INSERT INTO users(id,display_name,role,active,can_view_results,synthetic) VALUES (5,'Otro apoderado sintético','apoderado',true,false,true)"))
+        db.execute(text("INSERT INTO assignments(user_id,table_id) VALUES (5,1)"))
+    other = login(5)
+    assert other.post(f"/api/documents/{did}/complete").status_code == 403
+    OBJECTS[created.json()["upload_url"].removeprefix("fake://")] = photo.getvalue()
+    assert a.post(f"/api/documents/{did}/complete").status_code == 200
+    assert worker.process_one()
+    assert other.post(f"/api/documents/{did}/review", json={"decision":"validated","votes":{"1":1,"2":0},"total":1}).status_code == 403
 
 
 def test_withdraw_updates_aggregates():
@@ -212,6 +234,43 @@ def test_election_date_is_data():
         assert one(db,"SELECT enabled FROM election_chambers WHERE election_id=:id AND chamber='senado'",{"id":item["id"]})["enabled"]==0
     changed=update_date(item["id"],"2026-12-06",date_confirmed=True)
     assert changed["event_date"]=="2026-12-06"
+
+
+def test_versioned_candidacies_are_scoped_and_locked_after_documents(tmp_path):
+    item = create_election("CANDIDATURAS SINTÉTICAS DE PRUEBA", "2026-11-29", synthetic=True)
+    header = "constituency_code,candidacy_code,candidacy_name\n"
+    rows = "TEST,L1,LISTA SINTÉTICA A\nTEST,L2,LISTA SINTÉTICA B\n"
+    path = tmp_path / "candidacies.csv"
+    path.write_text(header + rows, encoding="utf-8")
+    assert len(parse_candidacies(path.read_bytes(), "synthetic")) == 2
+    try:
+        parse_candidacies((header + rows + rows).encode(), "synthetic")
+        assert False, "Se aceptaron candidaturas duplicadas"
+    except ValueError:
+        pass
+    try:
+        parse_candidacies((header + "28,L1,PRUEBA\n").encode(), "national")
+        assert False, "Se aceptó cobertura nacional incompleta"
+    except ValueError:
+        pass
+    national = header + "".join(f"{province:02d},L1,LISTA DE PRUEBA {province:02d}\n" for province in range(1, 53))
+    assert len(parse_candidacies(national.encode(), "national")) == 52
+    first = stage_candidacies(path, item["id"], "ensayo-1", "Archivo sintético de prueba", "synthetic")
+    assert first["status"] == "staged"
+    assert activate_candidacies(first["id"])["rows"] == 2
+    a, b = login(1), login(2)
+    assert b.get(f"/api/candidacies?table_id=1&election_id={item['id']}").status_code == 403
+    candidates = a.get(f"/api/candidacies?table_id=1&election_id={item['id']}").json()
+    assert [c["code"] for c in candidates] == ["L1", "L2"]
+    did = submit(a, 1, "candidacy-import-test", election_id=item["id"])
+    votes = {str(candidates[0]["id"]): 7, str(candidates[1]["id"]): 3}
+    assert review(a, did, votes).status_code == 200
+    second = stage_candidacies(path, item["id"], "ensayo-2", "Archivo sintético de prueba", "synthetic")
+    try:
+        activate_candidacies(second["id"])
+        assert False, "Se cambiaron candidaturas después de crear actas"
+    except ValueError as exc:
+        assert "actas" in str(exc)
 
 
 def test_national_import_structure_covers_52_provinces(tmp_path):

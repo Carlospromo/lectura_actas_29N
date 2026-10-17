@@ -59,6 +59,18 @@ py -3.13 -m app.reference_controls 'C:\Users\cpoza\Downloads\G2023julio_mesas_OK
 
 La salida JSON enumera cualquier discrepancia provincial. Los 22.706 locales sólo constan como recuento provincial y no se pueden cotejar por local con ese Excel. La decisión de cobertura es **parcial priorizada**; faltan criterios de prioridad y el listado 2026 de locales/mesas. Estos controles de 2023 no alimentan el dashboard operativo.
 
+### Candidaturas de Congreso por circunscripción
+
+La migración `004` añade un importador versionado. Recibe CSV UTF-8 con cabecera exacta `constituency_code,candidacy_code,candidacy_name`. Para un proceso nacional exige las 52 circunscripciones; los códigos de candidatura deben ser únicos dentro de cada provincia. `stage` conserva procedencia y SHA-256, pero **no activa** el archivo. En desarrollo puede ensayarse con un proceso sintético y `--scope synthetic`:
+
+```powershell
+py -3.13 -m app.candidacy_import stage .\ruta\candidaturas_sinteticas.csv --election-id ID --version ensayo-1 --source-name "Archivo sintético de prueba" --scope synthetic
+py -3.13 -m app.candidacy_import list
+py -3.13 -m app.candidacy_import activate ID_DEVUELTO_POR_STAGE
+```
+
+Para una elección no sintética se usa `--scope national`, tras cotejar la fuente y la versión aplicable. La activación exige que aún no existan actas de Congreso de esa elección; cambiar candidaturas con actas creadas requiere un procedimiento de reconciliación todavía pendiente. La API `GET /api/candidacies?table_id=...&election_id=...` devuelve las candidaturas activas de la mesa autorizada. No se han importado ni activado candidaturas reales de 2026; las de 2023 tampoco se trasladan automáticamente.
+
 ## Pruebas
 
 ```powershell

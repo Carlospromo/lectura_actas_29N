@@ -89,6 +89,19 @@ def tables(actor=Depends(user), db: Session=Depends(db_session)):
     return all_rows(db,"SELECT t.* FROM polling_tables t JOIN assignments a ON a.table_id=t.id WHERE a.user_id=:uid ORDER BY t.id",{"uid":actor["id"]})
 
 
+@app.get("/api/candidacies")
+def candidacies(table_id: int, election_id: int = 1, actor=Depends(user), db: Session=Depends(db_session)):
+    if not can_access(db, actor, table_id):
+        fail()
+    table = one(db, "SELECT province_code FROM polling_tables WHERE id=:id", {"id": table_id})
+    if not table:
+        fail(404, "Mesa inexistente")
+    active = one(db, "SELECT id FROM candidacy_imports WHERE election_id=:eid AND chamber='congreso' AND status='active'", {"eid": election_id})
+    if active:
+        return all_rows(db, "SELECT c.id,c.name,r.candidacy_code AS code FROM candidacy_import_rows r JOIN candidacies c ON c.id=r.candidacy_id WHERE r.import_id=:iid AND r.constituency_code=:province ORDER BY r.candidacy_code", {"iid": active["id"], "province": table["province_code"]})
+    return all_rows(db, "SELECT id,name FROM candidacies WHERE election_id=:eid AND chamber='congreso' AND constituency_code=:province ORDER BY id", {"eid": election_id, "province": table["province_code"]})
+
+
 class NewDocument(BaseModel):
     table_id: int
     election_id: int = 1
@@ -102,9 +115,9 @@ class NewDocument(BaseModel):
 def create_document(body: NewDocument, actor=Depends(user), db: Session=Depends(db_session)):
     if actor["role"] not in ("apoderado","supervisor","administrador") or not can_access(db,actor,body.table_id):
         fail()
-    existing = one(db,"SELECT d.*,i.object_key FROM documents d JOIN document_images i ON i.document_id=d.id WHERE d.uploader_id=:uid AND d.idempotency_key=:key",{"uid":actor["id"],"key":body.idempotency_key})
+    existing = one(db,"SELECT d.*,i.object_key,i.mime_type FROM documents d JOIN document_images i ON i.document_id=d.id WHERE d.uploader_id=:uid AND d.idempotency_key=:key",{"uid":actor["id"],"key":body.idempotency_key})
     if existing:
-        if (existing["table_id"],existing["election_id"],existing["chamber"],existing["document_type"]) != (body.table_id,body.election_id,body.chamber,body.document_type):
+        if (existing["table_id"],existing["election_id"],existing["chamber"],existing["document_type"],existing["mime_type"]) != (body.table_id,body.election_id,body.chamber,body.document_type,body.mime_type):
             fail(409,"Clave de idempotencia usada para otro documento")
         return {"id":existing["id"],"upload_url":upload_url(existing["object_key"],body.mime_type) if existing["status"]=="pending_upload" else None,"status":existing["status"]}
     if not one(db,"SELECT 1 AS ok FROM elections WHERE id=:id",{"id":body.election_id}):
@@ -138,7 +151,11 @@ def owned_document(db,actor,did):
 
 @app.post("/api/documents/{did}/complete")
 def complete(did: str, actor=Depends(user), db: Session=Depends(db_session)):
+    if actor["role"] not in ("apoderado", "supervisor", "administrador"):
+        fail()
     d = owned_document(db,actor,did)
+    if actor["role"] == "apoderado" and d["uploader_id"] != actor["id"]:
+        fail()
     if d["status"] != "pending_upload":
         return {"status":d["status"]}
     im = one(db,"SELECT * FROM document_images WHERE document_id=:id",{"id":did})
@@ -191,7 +208,7 @@ def document(did: str, actor=Depends(user), db: Session=Depends(db_session)):
     review_row = one(db,"SELECT r.values_json,r.decision,r.created_at,u.display_name AS reviewer FROM reviews r JOIN users u ON u.id=r.reviewer_id WHERE r.document_id=:id ORDER BY r.created_at DESC LIMIT 1",{"id":did})
     if review_row:
         review_row["values"] = json.loads(review_row.pop("values_json"))
-    return {"id":did,"table_id":d["table_id"],"version":d["version"],"status":d["status"],"conflict":d["conflict"],"current_validated":d["current_validated"],"review":review_row,"extraction":extraction}
+    return {"id":did,"election_id":d["election_id"],"table_id":d["table_id"],"version":d["version"],"status":d["status"],"conflict":d["conflict"],"current_validated":d["current_validated"],"review":review_row,"extraction":extraction}
 
 
 @app.get("/api/documents/{did}/image")
@@ -217,15 +234,21 @@ class Review(BaseModel):
 def review(did: str, body: Review, actor=Depends(user), db: Session=Depends(db_session)):
     if actor["role"] not in ("apoderado","supervisor","administrador"): fail()
     d = owned_document(db,actor,did)
+    if actor["role"] == "apoderado" and d["uploader_id"] != actor["id"]:
+        fail()
     if d["status"] not in ("pending_review","validated","rejected"):
         fail(409,"Documento aún no revisable")
     if d["status"] in ("validated","rejected"):
         fail(409,"Documento ya revisado")
     if any(v<0 for v in [*body.votes.values(),*body.candidate_votes.values(),body.blank,body.null,body.total]): fail(422,"Votos negativos")
-    expected = {str(r["id"]) for r in all_rows(db,"SELECT id FROM candidacies WHERE election_id=:eid AND chamber=:ch AND constituency_code=(SELECT province_code FROM polling_tables WHERE id=:tid)",{"eid":d["election_id"],"ch":d["chamber"],"tid":d["table_id"]})}
+    active_candidacies = one(db, "SELECT id FROM candidacy_imports WHERE election_id=:eid AND chamber='congreso' AND status='active'", {"eid": d["election_id"]}) if d["chamber"] == "congreso" else None
+    if active_candidacies:
+        expected = {str(r["id"]) for r in all_rows(db, "SELECT r.candidacy_id AS id FROM candidacy_import_rows r WHERE r.import_id=:iid AND r.constituency_code=(SELECT province_code FROM polling_tables WHERE id=:tid)", {"iid": active_candidacies["id"], "tid": d["table_id"]})}
+    else:
+        expected = {str(r["id"]) for r in all_rows(db,"SELECT id FROM candidacies WHERE election_id=:eid AND chamber=:ch AND constituency_code=(SELECT province_code FROM polling_tables WHERE id=:tid)",{"eid":d["election_id"],"ch":d["chamber"],"tid":d["table_id"]})}
     if body.decision == "validated":
         if d["chamber"] == "congreso":
-            if body.candidate_votes or set(body.votes)!=expected or sum(body.votes.values())+body.blank+body.null!=body.total:
+            if not expected or body.candidate_votes or set(body.votes)!=expected or sum(body.votes.values())+body.blank+body.null!=body.total:
                 fail(422,"Candidaturas incompletas o suma inconsistente para Congreso")
         else:
             candidates = {str(r["id"]) for r in all_rows(db,"SELECT ca.id FROM candidates ca JOIN candidacies c ON c.id=ca.candidacy_id WHERE c.election_id=:eid AND c.chamber='senado' AND c.constituency_code=(SELECT province_code FROM polling_tables WHERE id=:tid)",{"eid":d["election_id"],"tid":d["table_id"]})}
