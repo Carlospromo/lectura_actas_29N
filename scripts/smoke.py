@@ -37,28 +37,37 @@ def login(uid):
 
 def create():
     agent=login(1)
-    payload={"table_id":1,"mime_type":"image/jpeg","idempotency_key":"smoke-"+str(uuid.uuid4())}
-    r=agent.post("/api/documents",json=payload)
-    r.raise_for_status()
-    d=r.json()
-    assert d["upload_url"].startswith("http://localhost:9000/")
     image=io.BytesIO()
     Image.new("RGB",(100,100),"white").save(image,format="JPEG")
-    put=httpx.put(d["upload_url"],content=image.getvalue(),headers={"Content-Type":"image/jpeg"},timeout=30)
-    put.raise_for_status()
-    r=agent.post(f"/api/documents/{d['id']}/complete")
-    r.raise_for_status()
-    for _ in range(30):
-        status=agent.get(f"/api/documents/{d['id']}").json()["status"]
-        if status=="pending_review": break
-        time.sleep(1)
-    else: raise RuntimeError(f"Worker did not finish: {status}")
-    r=agent.post(f"/api/documents/{d['id']}/review",json={"decision":"validated","votes":{"1":100,"2":50},"blank":0,"null":0,"total":150})
+    def upload():
+        payload={"table_id":1,"mime_type":"image/jpeg","idempotency_key":"smoke-"+str(uuid.uuid4())}
+        r=agent.post("/api/documents",json=payload)
+        r.raise_for_status()
+        d=r.json()
+        assert d["upload_url"].startswith("http://localhost:9000/")
+        put=httpx.put(d["upload_url"],content=image.getvalue(),headers={"Content-Type":"image/jpeg"},timeout=30)
+        put.raise_for_status()
+        agent.post(f"/api/documents/{d['id']}/complete").raise_for_status()
+        for _ in range(30):
+            status=agent.get(f"/api/documents/{d['id']}").json()["status"]
+            if status=="pending_review": return d["id"]
+            time.sleep(1)
+        raise RuntimeError(f"Worker did not finish: {status}")
+    first=upload()
+    r=agent.post(f"/api/documents/{first}/review",json={"decision":"validated","votes":{"1":100,"2":50},"blank":0,"null":0,"total":150})
     r.raise_for_status()
     org=login(3)
     assert org.get("/api/dashboard").json()["validated_documents"] >= 1
-    ID_FILE.write_text(d["id"])
-    print("Created and validated",d["id"])
+    second=upload()
+    r=agent.post(f"/api/documents/{second}/review",json={"decision":"validated","votes":{"1":50,"2":100},"blank":0,"null":0,"total":150})
+    r.raise_for_status()
+    assert r.json()["resolution_pending"] is True
+    assert org.get("/api/dashboard").json()["votes"][0]["votes"]==100
+    assert any(c["document_id"]==second for c in org.get("/api/conflicts").json())
+    org.post(f"/api/conflicts/{second}/resolve",json={"decision":"accept_new","reason":"Verificación sintética de integración"}).raise_for_status()
+    assert org.get("/api/dashboard").json()["votes"][0]["votes"]==50
+    ID_FILE.write_text(second)
+    print("Created, resolved conflict and validated",second)
 
 
 def verify():
@@ -74,7 +83,8 @@ def verify():
     assert len(data.content)>100
     org=login(3)
     assert org.get("/api/dashboard").json()["validated_documents"] >= 1
-    print("Document, image and result survived service restart")
+    assert org.get("/api/dashboard").json()["votes"][0]["votes"]==50
+    print("Document, image, conflict decision and result survived service restart")
 
 
 if __name__=="__main__":
