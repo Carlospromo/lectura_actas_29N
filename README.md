@@ -12,7 +12,7 @@ docker compose up --build -d
 docker compose ps
 ```
 
-Abrir <http://localhost:8000>. El servicio de almacenamiento privado local usa el puerto 9000 para las subidas firmadas. El dashboard sólo se muestra a usuarios con permiso. Para parar sin borrar datos: `docker compose down`. Para reanudar: `docker compose up -d`. Los volúmenes `pgdata` y `objects` mantienen datos e imágenes. **No usar `down -v` si se desean conservar.**
+Abrir <http://localhost:8001>. El servicio de almacenamiento privado local usa el puerto 9000 para las subidas firmadas. El dashboard sólo se muestra a usuarios con permiso. Para parar sin borrar datos: `docker compose down`. Para reanudar: `docker compose up -d`. Los volúmenes `pgdata` y `objects` mantienen datos e imágenes. **No usar `down -v` si se desean conservar.**
 
 ## Recorrido
 

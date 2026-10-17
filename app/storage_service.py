@@ -9,7 +9,7 @@ from app.config import settings
 from app.storage import signature
 
 app=FastAPI(title="Development private object store")
-app.add_middleware(CORSMiddleware,allow_origins=["http://localhost:8000"],allow_methods=["PUT","GET"],allow_headers=["Content-Type"])
+app.add_middleware(CORSMiddleware,allow_origins=[settings.app_public_origin],allow_methods=["PUT","GET"],allow_headers=["Content-Type"])
 ROOT=Path(settings.storage_root).resolve()
 
 

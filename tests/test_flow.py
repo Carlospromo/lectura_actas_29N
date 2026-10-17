@@ -123,7 +123,7 @@ def test_dashboard_counts_beyond_500():
 def test_storage_signed_access_and_disk_persistence(tmp_path, monkeypatch):
     monkeypatch.setattr(storage_service,"ROOT",tmp_path)
     c=TestClient(storage_service.app)
-    preflight=c.options("/objects/test",headers={"Origin":"http://localhost:8000","Access-Control-Request-Method":"PUT","Access-Control-Request-Headers":"content-type"})
+    preflight=c.options("/objects/test",headers={"Origin":"http://localhost:8001","Access-Control-Request-Method":"PUT","Access-Control-Request-Headers":"content-type"})
     assert preflight.status_code==200
     key="elections/1/documents/test/original"
     url=storage.upload_url(key,"image/jpeg")

@@ -6,4 +6,5 @@ __pycache__/
 *.sqlite
 .smoke-id
 .ci-logs*
+.preview*
 .venv/

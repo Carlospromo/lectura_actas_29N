@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://actas:actas_local@localhost:5432/actas"
     storage_endpoint: str = "http://localhost:9000"
     storage_public_endpoint: str = "http://localhost:9000"
+    app_public_origin: str = "http://localhost:8001"
     storage_secret: str = "change-this-storage-secret-for-local-development"
     storage_root: str = "/data"
     session_secret: str = "change-this-for-local-development"

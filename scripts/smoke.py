@@ -8,7 +8,7 @@ from pathlib import Path
 import httpx
 from PIL import Image
 
-BASE = "http://localhost:8000"
+BASE = "http://localhost:8001"
 ID_FILE = Path(".smoke-id")
 
 
