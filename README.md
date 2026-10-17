@@ -35,6 +35,8 @@ docker compose config
 
 La suite usa SQLite temporal para probar las reglas de API y prueba el servicio de almacenamiento en disco. La integración PostgreSQL y almacenamiento tras reinicio se ejecuta en GitHub Actions. Para revisar datos reales de desarrollo:
 
+La [ejecución de integración 39009920269](https://github.com/Carlospromo/lectura_actas_29N/actions/runs/39009920269) pasó subida, extracción simulada, validación, dashboard y lectura de imagen tras reiniciar todos los servicios.
+
 ```powershell
 docker compose exec db psql -U actas -d actas -c "select status,count(*) from documents group by status;"
 docker compose logs worker
