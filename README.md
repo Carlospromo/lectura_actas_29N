@@ -51,6 +51,14 @@ py -3.13 -m app.reference_import list
 
 Cada importación verifica su estructura y cifras, registra SHA-256 y es idempotente para el mismo archivo. La verificación se hizo en una base SQLite aislada; los Excel originales permanecen en `Downloads` y no se incluyen en el repositorio. Para usar PostgreSQL, configure `DATABASE_URL` y haga accesibles los archivos al proceso importador. La documentación detallada de procedencia y límites está en [DEFINICION_ELECTORAL.md](DEFINICION_ELECTORAL.md).
 
+El [CSV de controles provinciales de 2023](data/reference/2023_province_controls.csv) transcribe las cifras comunicadas de municipios, distritos, secciones, mesas y locales. Para conciliar las cuatro primeras con el maestro histórico:
+
+```powershell
+py -3.13 -m app.reference_controls 'C:\Users\cpoza\Downloads\G2023julio_mesas_OK.xlsx'
+```
+
+La salida JSON enumera cualquier discrepancia provincial. Los 22.706 locales sólo constan como recuento provincial y no se pueden cotejar por local con ese Excel. La decisión de cobertura es **parcial priorizada**; faltan criterios de prioridad y el listado 2026 de locales/mesas. Estos controles de 2023 no alimentan el dashboard operativo.
+
 ## Pruebas
 
 ```powershell
