@@ -39,6 +39,18 @@ py -3.13 -m app.catalog activate ID_DEVUELTO_POR_STAGE
 
 En Compose, ejecute los mismos comandos con `docker compose exec api python -m app.catalog ...` y coloque primero el CSV en un volumen o cópielo al contenedor. La activación es atómica; no borra versiones ni documentos. Para un catálogo nacional se usa `--scope national`, una elección no sintética y la procedencia declarada con `--source-name` y `--source-url`; exige las 52 provincias. El archivo debe conciliarse manualmente con las fuentes del proceso antes de activarlo. Si el mismo identificador de mesa cambia de local, la activación se detiene para revisión.
 
+### Archivos de referencia aportados
+
+Los Excel de 2023 y 2026 se importan **separados de las mesas operativas**. El primero aporta la jerarquía territorial y las identidades históricas de mesa; carece de locales. Los 52 registros con municipio `999` son voto exterior. El segundo dice «Censo de consulta» y se guarda como referencia provincial provisional, no como censo definitivo. No se importan resultados ni candidaturas de 2023. En este equipo, con la base configurada:
+
+```powershell
+py -3.13 -m app.reference_import history 'C:\Users\cpoza\Downloads\G2023julio_mesas_OK.xlsx' --version 2023-jul-provided
+py -3.13 -m app.reference_import census 'C:\Users\cpoza\Downloads\Elecgral_2026_cc_tab3 (2).xlsx' --version 2026-consulta-provided
+py -3.13 -m app.reference_import list
+```
+
+Cada importación verifica su estructura y cifras, registra SHA-256 y es idempotente para el mismo archivo. La verificación se hizo en una base SQLite aislada; los Excel originales permanecen en `Downloads` y no se incluyen en el repositorio. Para usar PostgreSQL, configure `DATABASE_URL` y haga accesibles los archivos al proceso importador. La documentación detallada de procedencia y límites está en [DEFINICION_ELECTORAL.md](DEFINICION_ELECTORAL.md).
+
 ## Pruebas
 
 ```powershell

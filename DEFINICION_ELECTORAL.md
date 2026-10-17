@@ -13,13 +13,21 @@ Actualizado: 17 de octubre de 2026. Este documento recoge decisiones del promoto
 
 La identidad de mesa es `(provincia, municipio, distrito, sección, denominación)`. En importaciones nacionales, provincia es el código de dos dígitos y municipio el código de cinco dígitos que empieza por el provincial. Distrito y sección se normalizan conservando ceros iniciales; la denominación se convierte a mayúsculas. El local tiene un código externo estable dentro de provincia y municipio. Una mesa no puede cambiar silenciosamente de local entre versiones del catálogo.
 
-El importador recibe un CSV UTF-8 con las columnas, en este orden:
+El importador de mesas **operativas de la elección** recibe un CSV UTF-8 con las columnas, en este orden:
 
 ```text
 province_code,province_name,municipality_code,municipality_name,place_code,place_name,district,section,table_label
 ```
 
-`stage` valida estructura, unicidad de mesa, coherencia de nombres, SHA-256 y procedencia declarada. Para `--scope national` exige presencia de las 52 provincias, Ceuta y Melilla incluidas. `activate` se ejecuta en una transacción, conserva la versión anterior y marca una sola versión activa por elección. Un catálogo activo limita las nuevas actas y el denominador del dashboard a sus mesas. La activación no borra mesas ni documentos anteriores. La lista de locales y mesas **aún no se ha facilitado**; el importador no certifica su carácter oficial. Los códigos y nombres territoriales deberán cotejarse con la [relación vigente del INE](https://www.ine.es/dyngs/INEbase/es/operacion.htm?c=Estadistica_C&cid=1254736177031&idp=1254735976614&menu=ultiDatos), y la relación de mesas con la fuente electoral aportada para este proceso.
+`stage` valida estructura, unicidad de mesa, coherencia de nombres, SHA-256 y procedencia declarada. Para `--scope national` exige presencia de las 52 provincias, Ceuta y Melilla incluidas, y rechaza el municipio `999`: identifica voto exterior y no un local asignable a un apoderado. `activate` se ejecuta en una transacción, conserva la versión anterior y marca una sola versión activa por elección. Un catálogo activo limita las nuevas actas y el denominador del dashboard a sus mesas. La activación no borra mesas ni documentos anteriores. La lista de **2026 con locales** aún no se ha facilitado; el importador no certifica su carácter oficial. Los códigos y nombres territoriales deberán cotejarse con la [relación vigente del INE](https://www.ine.es/dyngs/INEbase/es/operacion.htm?c=Estadistica_C&cid=1254736177031&idp=1254735976614&menu=ultiDatos), y la relación de mesas con la fuente electoral del proceso.
+
+### Fuentes aportadas para avanzar el modelo
+
+El fichero maestro de julio de 2023 tiene 60.366 registros con identidad de mesa única: **60.314 interiores y 52 registros `COD.MUN=999` de voto exterior**, uno por provincia. Aporta 19 comunidades o ciudades autónomas, 52 provincias y 8.131 municipios interiores distintos. `cod.mesa` concatena código de comunidad, provincia, municipio, distrito, sección y mesa y coincide con sus columnas en todas las filas. **No contiene código, nombre ni dirección del local electoral.** La pestaña de candidaturas y las columnas de resultados de 2023 se conservan en el archivo original, pero el importador de referencia no las ingiere ni las vincula a 2026. El SHA-256 del archivo examinado es `922ded1729972fe1d1a772a15298dc90c91bd27c0fa1827e702fdb72b50e3352`.
+
+El archivo censal de 2026 se titula explícitamente **«Censo de consulta»**; el promotor confirmó usarlo como referencia provisional. Contiene 52 filas provinciales que concilian con 35.958.711 residentes en España, 2.769.645 en el extranjero y 38.728.356 en total. Es una referencia provincial, no un censo por mesa ni un catálogo de locales. Su SHA-256 es `9fd6da00a3ae74946e3f3d256ce3074f8e3f44665c87eabcb1d7b33c7c58ee01`.
+
+La migración `003` y `app.reference_import` almacenan estas dos fuentes como **instantáneas de referencia versionadas**, separadas de las mesas operativas y de los resultados. `999` se modela como ámbito `exterior` hijo de provincia, nunca como municipio real. Las denominaciones procedentes de cada archivo quedan en la instantánea; una variante de nombre no cambia silenciosamente el código ni reescribe la denominación canónica. No se han activado mesas 2023 como si fueran mesas 2026.
 
 ## Campos y reglas
 
@@ -40,8 +48,9 @@ Una segunda revisión con distribución distinta conserva ambos documentos, imá
 
 1. Convocatoria, fecha definitiva y denominación oficial de la elección.
 2. Modelos aprobados de acta de escrutinio de mesa para esta elección y fotografías autorizadas que cubran sus variantes.
-3. Fuente y formato del listado completo de locales y mesas, más cotejo del catálogo INE vigente.
-4. Relación de candidaturas por circunscripción y reglas de asignación de apoderados a mesas.
-5. Decidir si otros tipos de acta entran en el producto y qué campos adicionales de censo/participación son necesarios.
+3. Listado 2026 de locales y mesas, más cotejo de sus cambios respecto de 2023 y del catálogo INE vigente. Los registros `999` necesitarán un proceso diferenciado si se incorporan.
+4. Censo definitivo que sustituya al fichero de consulta aportado, manteniendo ambos con procedencia y versión.
+5. Relación definitiva de candidaturas por circunscripción y reglas de asignación de apoderados a mesas.
+6. Decidir si otros tipos de acta entran en el producto y qué campos adicionales de censo/participación son necesarios.
 
 Hasta entonces, la aplicación sólo ofrece el recorrido local sintético y no debe presentar sus reglas como validación electoral oficial.

@@ -185,6 +185,11 @@ def test_catalog_versioned_stage_activate(tmp_path):
         assert False,"cobertura nacional incompleta aceptada"
     except ValueError:
         pass
+    try:
+        parse_rows((header+"01,PROVINCIA DE PRUEBA,01999,CERA01,L,LOCAL DE PRUEBA,9,0,U\n").encode(),"national")
+        assert False,"voto exterior aceptado como mesa local"
+    except ValueError as exc:
+        assert "voto exterior" in str(exc)
     first=stage(file,1,"test-v1","Archivo sintético de prueba","synthetic")
     assert first["status"]=="staged"
     activated=activate(first["id"])

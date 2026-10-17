@@ -40,6 +40,8 @@ def parse_rows(data: bytes, scope: str):
             p, m = row["province_code"], row["municipality_code"]
             if scope == "national" and (p not in PROVINCES or not re.fullmatch(r"\d{5}", m) or not m.startswith(p)):
                 raise ValueError(f"Fila {number}: códigos territoriales inválidos")
+            if scope == "national" and m.endswith("999"):
+                raise ValueError(f"Fila {number}: 999 representa voto exterior, no una mesa local asignable")
             if scope == "synthetic" and not re.fullmatch(r"[A-Za-z0-9_-]{1,20}", p):
                 raise ValueError(f"Fila {number}: código sintético inválido")
             if not re.fullmatch(r"\d{1,3}", row["district"]) or not re.fullmatch(r"\d{1,4}", row["section"]):
@@ -101,8 +103,12 @@ def _next_id(db, table):
 def _territory(db, kind, code, name, parent_id=None):
     existing = one(db, "SELECT * FROM territories WHERE kind=:kind AND code=:code", {"kind": kind, "code": code})
     if existing:
-        if existing["name"] != name or existing["parent_id"] != parent_id:
-            raise ValueError(f"Territorio {kind}/{code} contradice un registro existente")
+        if kind == "province" and existing["parent_id"] is None and parent_id is not None:
+            db.execute(text("UPDATE territories SET parent_id=:parent WHERE id=:id"), {"parent": parent_id, "id": existing["id"]})
+        elif not (kind == "province" and parent_id is None) and existing["parent_id"] != parent_id:
+            raise ValueError(f"Territorio {kind}/{code} cambia de ámbito padre")
+        # Los nombres de distintas fuentes o épocas se conservan en sus filas versionadas.
+        # La denominación canónica existente no se reescribe de forma silenciosa.
         return existing["id"]
     new_id = _next_id(db, "territories")
     db.execute(text("INSERT INTO territories(id,parent_id,kind,code,name) VALUES (:id,:parent,:kind,:code,:name)"), {"id": new_id, "parent": parent_id, "kind": kind, "code": code, "name": name})
