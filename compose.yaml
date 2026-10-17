@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: actas
+      POSTGRES_USER: actas
+      POSTGRES_PASSWORD: actas_local
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U actas"]
+      interval: 2s
+      retries: 30
+  minio:
+    image: minio/minio:RELEASE.2025-02-07T23-21-09Z
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: localdev
+      MINIO_ROOT_PASSWORD: localdevsecret
+      MINIO_API_CORS_ALLOW_ORIGIN: http://localhost:8000
+    ports: ["9000:9000", "9001:9001"]
+    volumes: [objects:/data]
+  api:
+    build: .
+    env_file: .env
+    ports: ["8000:8000"]
+    depends_on:
+      db: {condition: service_healthy}
+      minio: {condition: service_started}
+    command: sh -c "python -m app.migrate && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+  worker:
+    build: .
+    env_file: .env
+    depends_on:
+      db: {condition: service_healthy}
+      minio: {condition: service_started}
+    command: python -m app.worker
+volumes:
+  pgdata:
+  objects:
